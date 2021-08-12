@@ -28,4 +28,44 @@ export default class {
     this.db = JSON.parse(fs.readFileSync(path.resolve(this.workDir, 'db.json')).toString())
   }
 
+  async onPrOpened (pr: number): Promise<void> {
+    if (!this.db.pulls[pr.toString()]?.comment) {
+      this.db.pulls[pr.toString()] = {
+        comment: (await this.octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+          owner: this.owner,
+          repo: this.repo,
+          issue_number: pr,
+          body: 'Hello!'
+        })).data.id
+      }
+    }
+    fs.writeFileSync(path.resolve(this.workDir, 'db.json'), JSON.stringify(this.db))
+  }
+
+  async onActionCompleted (runId: number, pr: number):Promise<void> {
+    const artifactList = (await this.octokit.request('/repos/{owner}/{repo}/actions/runs/{run_id}/artifacts', {
+      owner: this.owner,
+      repo: this.repo,
+      run_id: runId
+    })).data.artifacts
+    // eslint-disable-next-line no-var
+    var artifactId = -1
+    for (const artifact of artifactList) {
+      if (artifact.name === this.artifactName) {
+        artifactId = artifact.id
+        break
+      }
+    }
+    if (artifactId === -1) return
+    const artifactFile = new DataView((await this.octokit.request('GET /repos/{owner}/{repo}/actions/artifacts/{artifact_id}/{archive_format}', {
+      owner: this.owner,
+      repo: this.repo,
+      artifact_id: artifactId,
+      archive_format: 'zip'
+    })).data as ArrayBuffer)
+    fs.writeFileSync(path.resolve(this.workDir, `${pr.toString()}.zip`), artifactFile)
+    if (fs.existsSync(path.resolve(this.workDir, pr.toString()))) fs.rmSync(path.resolve(this.workDir, pr.toString()), { recursive: true })
+    await extract(path.resolve(this.workDir, `${pr.toString()}.zip`), { dir: path.resolve(this.workDir, pr.toString()) })
+    fs.rmSync(path.resolve(this.workDir, `${pr.toString()}.zip`))
+  }
 }

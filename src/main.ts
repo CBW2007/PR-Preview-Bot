@@ -67,6 +67,19 @@ export default (
           response.writeHead(200)
           response.write('200 OK:\nGood job!')
           response.end()
+          const objBody = JSON.parse(body)
+          if (request.headers['x-github-event'] === 'pull_request' && objBody.action === 'opened') {
+            bots[reqUrl].bot.onPrOpened(objBody.number)
+          } else if (request.headers['x-github-event'] === 'workflow_job' && objBody.workflow_job.name === bots[reqUrl].actionName) {
+            const pr = (await octokit.request('GET /repos/{owner}/{repo}/actions/runs/{run_id}', {
+              owner: bots[reqUrl].owner,
+              repo: bots[reqUrl].repo,
+              run_id: objBody.workflow_job.run_id
+            })).data.pull_requests
+            if (pr && objBody.action === 'completed') {
+              bots[reqUrl].bot.onActionCompleted(objBody.workflow_job.run_id, pr[0].number)
+            }
+          }
         }
       })
     }
