@@ -1,5 +1,6 @@
 import fs from 'fs'
 import path from 'path'
+import ChildProcess from 'child_process'
 import { Octokit } from '@octokit/core'
 import extract from 'extract-zip'
 
@@ -9,6 +10,7 @@ export default class {
   repo: string
   artifactName: string
   octokit: Octokit
+  surgeToken: string
   db: {
     pulls: {
       [pr: string]: {
@@ -17,12 +19,13 @@ export default class {
     }
   }
 
-  constructor (workDir:string, owner: string, repo: string, artifact: string, octokit: Octokit) {
+  constructor (workDir:string, owner: string, repo: string, artifact: string, octokit: Octokit, surgeToken: string) {
     this.workDir = workDir
     this.owner = owner
     this.repo = repo
     this.artifactName = artifact
     this.octokit = octokit
+    this.surgeToken = surgeToken
     if (!fs.existsSync(workDir)) fs.mkdirSync(workDir, { recursive: true })
     if (!fs.existsSync(path.resolve(this.workDir, 'db.json'))) fs.writeFileSync(path.resolve(this.workDir, 'db.json'), JSON.stringify({ pulls: {} }))
     this.db = JSON.parse(fs.readFileSync(path.resolve(this.workDir, 'db.json')).toString())
@@ -43,6 +46,7 @@ export default class {
   }
 
   async onActionCompleted (runId: number, pr: number):Promise<void> {
+    console.log(`on action completed runId:${runId} pr:${pr}`)
     const artifactList = (await this.octokit.request('/repos/{owner}/{repo}/actions/runs/{run_id}/artifacts', {
       owner: this.owner,
       repo: this.repo,
@@ -63,9 +67,13 @@ export default class {
       artifact_id: artifactId,
       archive_format: 'zip'
     })).data as ArrayBuffer)
-    fs.writeFileSync(path.resolve(this.workDir, `${pr.toString()}.zip`), artifactFile)
-    if (fs.existsSync(path.resolve(this.workDir, pr.toString()))) fs.rmSync(path.resolve(this.workDir, pr.toString()), { recursive: true })
-    await extract(path.resolve(this.workDir, `${pr.toString()}.zip`), { dir: path.resolve(this.workDir, pr.toString()) })
-    fs.rmSync(path.resolve(this.workDir, `${pr.toString()}.zip`))
+    const zipPath = path.resolve(this.workDir, `${pr.toString()}.zip`)
+    const srcPath = path.resolve(this.workDir, pr.toString())
+    fs.writeFileSync(zipPath, artifactFile)
+    if (fs.existsSync(srcPath)) fs.rmSync(srcPath, { recursive: true })
+    await extract(zipPath, { dir: srcPath })
+    fs.rmSync(zipPath)
+    console.log('artifact loaded')
+    console.log(ChildProcess.execSync(`surge ${srcPath} ${this.owner}--${this.repo}--pr${pr}--preview.surge.sh --token ${this.surgeToken}`).toString())
   }
 }

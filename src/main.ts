@@ -27,7 +27,7 @@ export default (
   }} = {}
   projects.forEach((v) => {
     bots[`/${v.owner}/${v.repo}`] = {
-      bot: new Bot(path.resolve(workDir, v.owner, v.repo), v.owner, v.repo, v.artifactName, octokit),
+      bot: new Bot(path.resolve(workDir, v.owner, v.repo), v.owner, v.repo, v.artifactName, octokit, surgeToken),
       owner: v.owner,
       repo: v.repo,
       actionName: v.actionName,
@@ -56,9 +56,6 @@ export default (
         body = body + chunk
       })
       request.on('end', async () => {
-        // console.log(crypto.createHmac('sha256', webSecret).update(body).digest('hex'))
-        // console.log(body)
-        // console.log(webSecret)
         if ('sha256=' + crypto.createHmac('sha256', webSecret).update(body).digest('hex') !== request.headers['x-hub-signature-256']) {
           response.writeHead(403)
           response.write('403 Forbidden:\nFailed to verify signature')
