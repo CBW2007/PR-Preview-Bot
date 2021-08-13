@@ -1,9 +1,6 @@
 import main from './main'
+import fs from 'fs'
 
-main('./cache',
-  9999,
-  [{ owner: 'CBW2007', repo: 'test', actionName: 'build', artifactName: 'public' }],
-  'ghToken',
-  'webSecret',
-  'surgeToken'
-)
+const config = JSON.parse(fs.readFileSync('./config.json').toString())
+
+main(config.workDir, config.port, config.projects, config.ghToken, config.webSecret, config.surgeToken)
