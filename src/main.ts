@@ -73,8 +73,11 @@ export default (
               repo: bots[reqUrl].repo,
               run_id: objBody.workflow_job.run_id
             })).data.pull_requests
-            if (pr && objBody.action === 'completed') {
-              bots[reqUrl].bot.onActionCompleted(objBody.workflow_job.run_id, pr[0].number)
+            if (!pr) return
+            if (objBody.action === 'queued') {
+              bots[reqUrl].bot.onActionStarted(objBody.workflow_job.run_id, pr[0].number, objBody.workflow_job.head_sha)
+            } else if (objBody.action === 'completed') {
+              bots[reqUrl].bot.onActionCompleted(objBody.workflow_job.run_id, pr[0].number, objBody.workflow_job.head_sha)
             }
           }
         }

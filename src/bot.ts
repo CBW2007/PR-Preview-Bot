@@ -3,6 +3,7 @@ import path from 'path'
 import ChildProcess from 'child_process'
 import { Octokit } from '@octokit/core'
 import extract from 'extract-zip'
+import { generateComment } from './utils'
 
 export default class {
   workDir: string
@@ -14,7 +15,8 @@ export default class {
   db: {
     pulls: {
       [pr: string]: {
-        comment: number
+        commentId: number,
+        commentBody: string
       }
     }
   }
@@ -31,21 +33,42 @@ export default class {
     this.db = JSON.parse(fs.readFileSync(path.resolve(this.workDir, 'db.json')).toString())
   }
 
+  async updComment (commentId: number, body: string, pr: number, commitSha: string) {
+    await this.octokit.request('PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}', {
+      owner: this.owner,
+      repo: this.repo,
+      comment_id: commentId,
+      body
+    })
+    this.db.pulls[pr.toString()].commentBody = body
+  }
+
   async onPrOpened (pr: number): Promise<void> {
-    if (!this.db.pulls[pr.toString()]?.comment) {
+    console.log(`on pr opened pr:${pr}`)
+    if (!this.db.pulls[pr.toString()]?.commentId) {
       this.db.pulls[pr.toString()] = {
-        comment: (await this.octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+        commentId: (await this.octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
           owner: this.owner,
           repo: this.repo,
           issue_number: pr,
           body: 'Hello!'
-        })).data.id
+        })).data.id,
+        commentBody: 'Hello!'
       }
     }
     fs.writeFileSync(path.resolve(this.workDir, 'db.json'), JSON.stringify(this.db))
   }
 
-  async onActionCompleted (runId: number, pr: number):Promise<void> {
+  async onActionStarted (runId: number, pr: number, commitSha: string): Promise<void> {
+    console.log(`on action started runId:${runId} pr:${pr}`)
+    if (!this.db.pulls[pr.toString()]?.commentId) await this.onPrOpened(pr)
+    const body = generateComment(`https://${this.owner}--${this.repo}--pr${pr}--preview.surge.sh`, 0, commitSha)
+    if (body !== this.db.pulls[pr.toString()].commentBody) {
+      await this.updComment(this.db.pulls[pr.toString()].commentId, body, pr, commitSha)
+    }
+  }
+
+  async onActionCompleted (runId: number, pr: number, commitSha: string): Promise<void> {
     console.log(`on action completed runId:${runId} pr:${pr}`)
     const artifactList = (await this.octokit.request('/repos/{owner}/{repo}/actions/runs/{run_id}/artifacts', {
       owner: this.owner,
@@ -75,5 +98,9 @@ export default class {
     fs.rmSync(zipPath)
     console.log('artifact loaded')
     console.log(ChildProcess.execSync(`surge ${srcPath} ${this.owner}--${this.repo}--pr${pr}--preview.surge.sh --token ${this.surgeToken}`).toString())
+    const body = generateComment(`https://${this.owner}--${this.repo}--pr${pr}--preview.surge.sh`, 1, commitSha)
+    if (body !== this.db.pulls[pr.toString()].commentBody && commitSha) {
+      await this.updComment(this.db.pulls[pr.toString()].commentId, body, pr, commitSha)
+    }
   }
 }
