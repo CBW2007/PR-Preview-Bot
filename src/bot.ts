@@ -3,7 +3,7 @@ import path from 'path'
 import ChildProcess from 'child_process'
 import { Octokit } from '@octokit/core'
 import extract from 'extract-zip'
-import { generateComment } from './utils'
+import { genComment } from './utils'
 
 export default class {
   workDir: string
@@ -16,7 +16,9 @@ export default class {
     pulls: {
       [pr: string]: {
         commentId: number,
-        commentBody: string
+        commentBody: string,
+        siteCommit: string,
+        headCommit: string
       }
     }
   }
@@ -33,42 +35,65 @@ export default class {
     this.db = JSON.parse(fs.readFileSync(path.resolve(this.workDir, 'db.json')).toString())
   }
 
-  async updComment (commentId: number, body: string, pr: number, commitSha: string) {
+  async syncDb (): Promise<void> {
+    fs.writeFileSync(path.resolve(this.workDir, 'db.json'), JSON.stringify(this.db))
+  }
+
+  async updComment (commentId: number, body: string, pr: number, commitSha?: string) {
+    const strPrId = pr.toString()
     await this.octokit.request('PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}', {
       owner: this.owner,
       repo: this.repo,
       comment_id: commentId,
       body
     })
-    this.db.pulls[pr.toString()].commentBody = body
+    this.db.pulls[strPrId].commentBody = body
+    if (commitSha) this.db.pulls[strPrId].siteCommit = commitSha
+    this.syncDb()
   }
 
-  async onPrOpened (pr: number): Promise<void> {
+  async onPrOpened (pr: number, headCommit: string): Promise<void> {
+    const strPrId = pr.toString()
     console.log(`on pr opened pr:${pr}`)
-    if (!this.db.pulls[pr.toString()]?.commentId) {
-      this.db.pulls[pr.toString()] = {
+    if (!this.db.pulls[strPrId]?.commentId) {
+      this.db.pulls[strPrId] = {
         commentId: (await this.octokit.request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
           owner: this.owner,
           repo: this.repo,
           issue_number: pr,
           body: 'Hello!'
         })).data.id,
-        commentBody: 'Hello!'
+        commentBody: 'Hello!',
+        siteCommit: '',
+        headCommit: headCommit
       }
     }
-    fs.writeFileSync(path.resolve(this.workDir, 'db.json'), JSON.stringify(this.db))
+    this.syncDb()
   }
 
-  async onActionStarted (runId: number, pr: number, commitSha: string): Promise<void> {
+  async onPrSynced (pr: number, headCommit: string): Promise<void> {
+    this.db.pulls[pr.toString()].headCommit = headCommit
+    this.syncDb()
+  }
+
+  async onActionStarted (runId: number, pr: number, headCommit: string): Promise<void> {
+    const strPrId = pr.toString()
+    this.db.pulls[strPrId].headCommit = headCommit
     console.log(`on action started runId:${runId} pr:${pr}`)
-    if (!this.db.pulls[pr.toString()]?.commentId) await this.onPrOpened(pr)
-    const body = generateComment(`https://${this.owner}--${this.repo}--pr${pr}--preview.surge.sh`, 0, commitSha)
-    if (body !== this.db.pulls[pr.toString()].commentBody) {
-      await this.updComment(this.db.pulls[pr.toString()].commentId, body, pr, commitSha)
+    if (!this.db.pulls[strPrId]?.commentId) await this.onPrOpened(pr, headCommit)
+    const commentBody = genComment(
+      `https://${this.owner.toLowerCase()}--${this.repo.toLowerCase()}--pr${pr}--preview.surge.sh`,
+      (this.db.pulls[strPrId].headCommit === this.db.pulls[strPrId].siteCommit) ? 'Online' : 'Not Latest',
+      'Preparing Latest Build',
+      this.db.pulls[strPrId].siteCommit
+    )
+    if (commentBody !== this.db.pulls[strPrId].commentBody) {
+      this.updComment(this.db.pulls[strPrId].commentId, commentBody, pr)
     }
   }
 
-  async onActionCompleted (runId: number, pr: number, commitSha: string): Promise<void> {
+  async onActionCompleted (runId: number, pr: number, headSha: string): Promise<void> {
+    const strPrId = pr.toString()
     console.log(`on action completed runId:${runId} pr:${pr}`)
     const artifactList = (await this.octokit.request('/repos/{owner}/{repo}/actions/runs/{run_id}/artifacts', {
       owner: this.owner,
@@ -90,17 +115,20 @@ export default class {
       artifact_id: artifactId,
       archive_format: 'zip'
     })).data as ArrayBuffer)
-    const zipPath = path.resolve(this.workDir, `${pr.toString()}.zip`)
-    const srcPath = path.resolve(this.workDir, pr.toString())
+    const zipPath = path.resolve(this.workDir, `${strPrId}.zip`)
+    const srcPath = path.resolve(this.workDir, strPrId)
     fs.writeFileSync(zipPath, artifactFile)
     if (fs.existsSync(srcPath)) fs.rmSync(srcPath, { recursive: true })
     await extract(zipPath, { dir: srcPath })
     fs.rmSync(zipPath)
     console.log('artifact loaded')
-    console.log(ChildProcess.execSync(`surge ${srcPath} ${this.owner}--${this.repo}--pr${pr}--preview.surge.sh --token ${this.surgeToken}`).toString())
-    const body = generateComment(`https://${this.owner}--${this.repo}--pr${pr}--preview.surge.sh`, 1, commitSha)
-    if (body !== this.db.pulls[pr.toString()].commentBody && commitSha) {
-      await this.updComment(this.db.pulls[pr.toString()].commentId, body, pr, commitSha)
+    const siteUrl = `https://${this.owner.toLowerCase()}--${this.repo.toLowerCase()}--pr${pr}--preview.surge.sh`
+    console.log(ChildProcess.execSync(`surge ${srcPath} ${siteUrl} --token ${this.surgeToken}`).toString())
+    const commentBody = genComment(siteUrl, 'Online', '', headSha)
+    if (commentBody !== this.db.pulls[strPrId].commentBody) {
+      this.updComment(this.db.pulls[strPrId].commentId, commentBody, pr, headSha)
     }
   }
+
+  async onCommented () {}
 }

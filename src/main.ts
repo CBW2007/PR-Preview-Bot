@@ -65,8 +65,12 @@ export default (
           response.write('200 OK:\nGood job!')
           response.end()
           const objBody = JSON.parse(body)
-          if (request.headers['x-github-event'] === 'pull_request' && objBody.action === 'opened') {
-            bots[reqUrl].bot.onPrOpened(objBody.number)
+          if (request.headers['x-github-event'] === 'pull_request') {
+            if (objBody.action === 'opened') {
+              bots[reqUrl].bot.onPrOpened(objBody.number, objBody.pull_request.head.sha)
+            } else if (objBody.action === 'synchronize') {
+              bots[reqUrl].bot.onPrSynced(objBody.number, objBody.pull_request.head.sha)
+            }
           } else if (request.headers['x-github-event'] === 'workflow_job' && objBody.workflow_job.name === bots[reqUrl].actionName) {
             const pr = (await octokit.request('GET /repos/{owner}/{repo}/actions/runs/{run_id}', {
               owner: bots[reqUrl].owner,
@@ -79,6 +83,8 @@ export default (
             } else if (objBody.action === 'completed') {
               bots[reqUrl].bot.onActionCompleted(objBody.workflow_job.run_id, pr[0].number, objBody.workflow_job.head_sha)
             }
+          } else if (request.headers['x-github-event'] === 'issue_comment' && objBody.action === 'created' && objBody.issue.html_url.indexOf('pull') !== -1) {
+            bots[reqUrl].bot.onCommented()
           }
         }
       })
