@@ -66,10 +66,12 @@ export default (
           response.end()
           const objBody = JSON.parse(body)
           if (request.headers['x-github-event'] === 'pull_request') {
-            if (objBody.action === 'opened') {
+            if (objBody.action === 'opened' || objBody.action === 'reopened') {
               bots[reqUrl].bot.onPrOpened(objBody.number, objBody.pull_request.head.sha)
             } else if (objBody.action === 'synchronize') {
               bots[reqUrl].bot.onPrSynced(objBody.number, objBody.pull_request.head.sha)
+            } else if (objBody.action === 'closed') {
+              bots[reqUrl].bot.onPrClosed(objBody.number)
             }
           } else if (request.headers['x-github-event'] === 'workflow_job' && objBody.workflow_job.name === bots[reqUrl].actionName) {
             const pr = (await octokit.request('GET /repos/{owner}/{repo}/actions/runs/{run_id}', {

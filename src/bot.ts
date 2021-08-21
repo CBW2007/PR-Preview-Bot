@@ -77,6 +77,14 @@ export default class {
     this.syncDb()
   }
 
+  async onPrClosed (pr: number): Promise<void> {
+    console.log(`on pr closed pr:${pr}`)
+    const siteUrl = `https://${this.owner.toLowerCase()}--${this.repo.toLowerCase()}--pr${pr}--preview.surge.sh`
+    const commentBody = genComment(siteUrl, 'Offline', '')
+    console.log(ChildProcess.execSync(`surge teardown ${siteUrl} --token ${this.surgeToken}`).toString())
+    this.updComment(commentBody, pr, '')
+  }
+
   async onActionStarted (runId: number, pr: number, headCommit: string): Promise<void> {
     const strPrId = pr.toString()
     this.db.pulls[strPrId].headCommit = headCommit
