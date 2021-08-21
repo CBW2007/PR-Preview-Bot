@@ -39,16 +39,17 @@ export default class {
     fs.writeFileSync(path.resolve(this.workDir, 'db.json'), JSON.stringify(this.db))
   }
 
-  async updComment (commentId: number, body: string, pr: number, commitSha?: string) {
+  async updComment (body: string, pr: number, commitSha: string): Promise<void> {
     const strPrId = pr.toString()
+    if (body === this.db.pulls[strPrId].commentBody) return
     await this.octokit.request('PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}', {
       owner: this.owner,
       repo: this.repo,
-      comment_id: commentId,
+      comment_id: this.db.pulls[strPrId].commentId,
       body
     })
     this.db.pulls[strPrId].commentBody = body
-    if (commitSha) this.db.pulls[strPrId].siteCommit = commitSha
+    this.db.pulls[strPrId].siteCommit = commitSha
     this.syncDb()
   }
 
@@ -87,9 +88,7 @@ export default class {
       'Preparing Latest Build',
       this.db.pulls[strPrId].siteCommit
     )
-    if (commentBody !== this.db.pulls[strPrId].commentBody) {
-      this.updComment(this.db.pulls[strPrId].commentId, commentBody, pr)
-    }
+    this.updComment(commentBody, pr, this.db.pulls[strPrId].siteCommit)
   }
 
   async onActionCompleted (runId: number, pr: number, headSha: string): Promise<void> {
@@ -125,9 +124,7 @@ export default class {
     const siteUrl = `https://${this.owner.toLowerCase()}--${this.repo.toLowerCase()}--pr${pr}--preview.surge.sh`
     console.log(ChildProcess.execSync(`surge ${srcPath} ${siteUrl} --token ${this.surgeToken}`).toString())
     const commentBody = genComment(siteUrl, 'Online', '', headSha)
-    if (commentBody !== this.db.pulls[strPrId].commentBody) {
-      this.updComment(this.db.pulls[strPrId].commentId, commentBody, pr, headSha)
-    }
+    this.updComment(commentBody, pr, headSha)
   }
 
   async onCommented () {}
