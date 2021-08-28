@@ -3,7 +3,7 @@ import path from 'path'
 import ChildProcess from 'child_process'
 import { Octokit } from '@octokit/core'
 import extract from 'extract-zip'
-import { genComment } from './utils'
+import { genComment, md5, SiteStat, ServerStat } from './utils'
 
 export default class {
   workDir: string
@@ -39,17 +39,27 @@ export default class {
     fs.writeFileSync(path.resolve(this.workDir, 'db.json'), JSON.stringify(this.db))
   }
 
-  async updComment (body: string, pr: number, commitSha: string): Promise<void> {
+  async updComment (pr: number, commitSha: string, serverStat: ServerStat): Promise<void> {
     const strPrId = pr.toString()
-    if (body === this.db.pulls[strPrId].commentBody) return
+    this.db.pulls[strPrId].siteCommit = commitSha
+    const siteStat: SiteStat = (this.db.pulls[strPrId].siteCommit)
+      ? ((this.db.pulls[strPrId].siteCommit === this.db.pulls[strPrId].headCommit) ? 'Online' : 'Not Latest')
+      : 'Offline'
+    const commentBody = genComment(
+      `https://${this.owner.toLowerCase()}--${this.repo.toLowerCase()}--pr${pr}--preview.surge.sh`,
+      siteStat,
+      serverStat,
+      this.db.pulls[strPrId].siteCommit
+    )
+    const bodyMd5 = md5(commentBody)
+    if (bodyMd5 === this.db.pulls[strPrId].commentBody) return
     await this.octokit.request('PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}', {
       owner: this.owner,
       repo: this.repo,
       comment_id: this.db.pulls[strPrId].commentId,
-      body
+      body: commentBody
     })
-    this.db.pulls[strPrId].commentBody = body
-    this.db.pulls[strPrId].siteCommit = commitSha
+    this.db.pulls[strPrId].commentBody = bodyMd5
     this.syncDb()
   }
 
@@ -75,28 +85,22 @@ export default class {
   async onPrSynced (pr: number, headCommit: string): Promise<void> {
     this.db.pulls[pr.toString()].headCommit = headCommit
     this.syncDb()
+    this.updComment(pr, this.db.pulls[pr.toString()].siteCommit, 'Ready')
   }
 
   async onPrClosed (pr: number): Promise<void> {
     console.log(`on pr closed pr:${pr}`)
     const siteUrl = `https://${this.owner.toLowerCase()}--${this.repo.toLowerCase()}--pr${pr}--preview.surge.sh`
-    const commentBody = genComment(siteUrl, 'Offline', '')
     console.log(ChildProcess.execSync(`surge teardown ${siteUrl} --token ${this.surgeToken}`).toString())
-    this.updComment(commentBody, pr, '')
+    fs.rmSync(path.resolve(this.workDir, pr.toString()), { recursive: true })
+    this.updComment(pr, '', 'Closed')
   }
 
   async onActionStarted (runId: number, pr: number, headCommit: string): Promise<void> {
     const strPrId = pr.toString()
-    this.db.pulls[strPrId].headCommit = headCommit
     console.log(`on action started runId:${runId} pr:${pr}`)
     if (!this.db.pulls[strPrId]?.commentId) await this.onPrOpened(pr, headCommit)
-    const commentBody = genComment(
-      `https://${this.owner.toLowerCase()}--${this.repo.toLowerCase()}--pr${pr}--preview.surge.sh`,
-      (this.db.pulls[strPrId].headCommit === this.db.pulls[strPrId].siteCommit) ? 'Online' : 'Not Latest',
-      'Preparing Latest Build',
-      this.db.pulls[strPrId].siteCommit
-    )
-    this.updComment(commentBody, pr, this.db.pulls[strPrId].siteCommit)
+    this.updComment(pr, this.db.pulls[strPrId].siteCommit, 'Preparing')
   }
 
   async onActionCompleted (runId: number, pr: number, headSha: string): Promise<void> {
@@ -116,23 +120,25 @@ export default class {
       }
     }
     if (artifactId === -1) return
-    const artifactFile = new DataView((await this.octokit.request('GET /repos/{owner}/{repo}/actions/artifacts/{artifact_id}/{archive_format}', {
+    const tmp = (await this.octokit.request('GET /repos/{owner}/{repo}/actions/artifacts/{artifact_id}/{archive_format}', {
       owner: this.owner,
       repo: this.repo,
       artifact_id: artifactId,
       archive_format: 'zip'
-    })).data as ArrayBuffer)
+    }))
+    // console.log(tmp)
+    const artifactFile = new DataView(tmp.data as ArrayBuffer)
     const zipPath = path.resolve(this.workDir, `${strPrId}.zip`)
     const srcPath = path.resolve(this.workDir, strPrId)
     fs.writeFileSync(zipPath, artifactFile)
+    console.log('artifact downloaded')
     if (fs.existsSync(srcPath)) fs.rmSync(srcPath, { recursive: true })
     await extract(zipPath, { dir: srcPath })
     fs.rmSync(zipPath)
     console.log('artifact loaded')
     const siteUrl = `https://${this.owner.toLowerCase()}--${this.repo.toLowerCase()}--pr${pr}--preview.surge.sh`
     console.log(ChildProcess.execSync(`surge ${srcPath} ${siteUrl} --token ${this.surgeToken}`).toString())
-    const commentBody = genComment(siteUrl, 'Online', '', headSha)
-    this.updComment(commentBody, pr, headSha)
+    this.updComment(pr, headSha, 'Ready')
   }
 
   async onCommented () {}
